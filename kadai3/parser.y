@@ -22,10 +22,10 @@ typedef enum {
     CONSTANT
 } Scope;
 
-Scope flag = GLOBAL_VAR; //スコープはグローバルで初期化
+Scope flag = GLOBAL_VAR; //変数のスコープはグローバルで初期化
 
 struct TableData { //記号表のレコードを一般化した構造体
-    char name[256]; //記号
+    char name[16]; //記号
     int num; //割り当てられた番号
     int kind; //Scopeで管理される種別番号
 };
@@ -63,16 +63,33 @@ void pop(struct STACK *stk) {
 //スタックに積まれたデータを先頭から順に出力する
 void show(struct STACK *stk) {
     struct STACK_DATA *p = stk->top; //出力するデータを指すポインタ
+    char *kind;
+    printf(" _______________________________________\n");
+    printf("|       kind             Name   val/adr |\n");
+    printf("|---------------------------------------|\n");
     while (1) {
+        switch (p->data.kind) {
+          case 0:
+              kind = "GLOBAL_VAR";
+              break;
+          case 1:
+              kind = "LOCAL_VAR";
+              break;
+          case 2:
+              kind = "PROC_NAME";
+              break;
+          case 3:
+              kind = "CONSTANT";
+        }
         if (p->prev == NULL) { //先頭データに達した場合
-            printf("%s %d %d\n", p->data.name, p->data.num, p->data.kind);
+            printf("|%11s %16s %9d |\n", kind, p->data.name, p->data.num);
             break;
         } else { //先頭データでない場合
-            printf("%s %d %d\n", p->data.name, p->data.num, p->data.kind);
+            printf("|%11s %16s %9d |\n", kind, p->data.name, p->data.num);
             p = p->prev; //次の出力対象を一つ前のデータに
         }
     }
-    printf("-------------\n");
+    printf("|_______________________________________|\n\n");
 }
 
 struct STACK stk; //記号表のためのスタックをグローバルで宣言
