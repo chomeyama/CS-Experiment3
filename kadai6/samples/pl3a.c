@@ -1,19 +1,19 @@
 #include <stdio.h>
 
-int i, j, n, a[101];
+int i, j, n, a[100];
 
 void initialize(int n) {
   int i;
   for (i = 1; i <= n; i++) {
-    scanf("%d", &a[i]);
+    scanf("%d", &a[i-1]);
   }
 }
 
 void swap(int j) {
   int temp;
-  temp = a[j];
-  a[j] = a[j+1];
-  a[j+1] = temp;
+  temp = a[j-1];
+  a[j-1] = a[j+1-1];
+  a[j+1-1] = temp;
 }
 
 int main() {
@@ -24,12 +24,12 @@ int main() {
     while (1 <= i) {
       j = 1;
       while (j < i) {
-        if (a[j] > a[j+1]) {
+        if (a[j-1] > a[j+1-1]) {
           swap(j);
         }
         j++;
       }
-      printf("%d\n", a[i]);
+      printf("%d\n", a[i-1]);
       i--;
     }
   }

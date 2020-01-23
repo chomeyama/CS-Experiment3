@@ -10,7 +10,7 @@ procedure check(p);
     i := p;
     while i <= 100 do
       begin
-	      a[i] := 1;
+	      a[i] := z1;
 	      i := i + p;
       end
   end;

@@ -402,10 +402,10 @@ statement
       expression {Factor arg1 = makeFactor(LOCAL_VAR, "", reg_cntr++);
                   LoadPush(*lookup($2), arg1);
                   Factor retval = makeFactor(LOCAL_VAR, "", reg_cntr++);
-                  IcmpPush(SLE, arg1, FactorStackPtr->data, retval); BrCondPush(retval, reg_cntr, -1);}
+                  IcmpPush(SLT, arg1, FactorStackPtr->data, retval); BrCondPush(retval, reg_cntr, -1);}
       DO {LabelPush(reg_cntr++);}
       statement {Factor incrementee = *lookup($2);
-                 Factor arg1 = makeFactor(LOCAL_VAR, "", reg_cntr);
+Z                 Factor arg1 = makeFactor(LOCAL_VAR, "", reg_cntr++);
                  LoadPush(incrementee, makeFactor(LOCAL_VAR, "", reg_cntr++));
                  Factor retval = makeFactor(LOCAL_VAR, "", reg_cntr++);
                  AddPush(arg1, makeFactor(CONSTANT, "", 1), retval);

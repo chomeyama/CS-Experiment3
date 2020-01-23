@@ -41,6 +41,9 @@ typedef struct _FactorStack {
 /*Tableスタック*/
 typedef struct _TableStack{
     Factor data; //記号表のレコード
+    int lnum;
+    int rnum;
+    int num;
     struct _TableStack *prev; //前のノードへのポインタ
 } TableStack;
 
@@ -54,6 +57,7 @@ typedef struct _Argument {
 typedef enum {
   Alloca,   /* alloca */
   Global,   /* global */
+  ArrayGlobal, /* arrayglobal */
   Store,    /* store  */
   Load,     /* load   */
   BrUncond, /* br     */
@@ -68,7 +72,9 @@ typedef enum {
   Write,    /* write  */
   Call,     /* call   */
   Retint,   /* ret    */
-  Retvoid   /* retvoid*/
+  Retvoid,  /* retvoid*/
+  Sext,     /* sext   */
+  Getelementptr /* getelementptr */
 } LLVMcommand;
 
 /* 比較演算子の種類 */
@@ -90,6 +96,9 @@ typedef struct llvmcode {
     struct { /* global */
       Factor retval;
     } global;
+    struct { /* arrayglobal */
+      char vname[256]; int num;
+    } arrayglobal;
     struct { /* store  */
       Factor arg1;  Factor arg2;
     } store;
@@ -124,7 +133,7 @@ typedef struct llvmcode {
       Factor arg1; Factor retval;
     } read;
     struct { /* call   */
-      char fname[20];
+      char fname[256];
       Rettype type;
       Factor ret;
       Argument *arghd; /*先頭アドレス*/
@@ -138,6 +147,12 @@ typedef struct llvmcode {
     } retint;
     struct { /* retvoid */
     } retvoid;
+    struct { /* sext */
+      Factor arg1; Factor retval;
+    } sext;
+    struct { /* getelementptr */
+      char vname[256]; Factor arg1; Factor retval;
+    } getelementptr;
   } args;
   /* 次の命令へのポインタ */
   struct llvmcode *next;
@@ -168,6 +183,9 @@ typedef struct brcommand {
 
 FILE *fp; //result.llのファイルポインタ
 Scope flag = GLOBAL_VAR; //変数のスコープはグローバルで初期化
+unsigned int read_arg = 0;
+unsigned int read_decl_flag = 0;
+unsigned int write_decl_flag = 0;
 unsigned int reg_cntr = 0; //レジスタ番号管理のためのカウンタ
 
 TableStack *TableStackPtr = NULL; //Tableスタックのスタックポインタ
@@ -177,6 +195,7 @@ void TableShow(); //Tableスタックの全データを出力するための関�
 
 void insert(char*, Scope); //記号表への追加を行う関数
 Factor* lookup(char*); //記号表から検索を行う関数
+TableStack* lookupArray(char*);
 void delete(); //記号表から要素を削除する関数
 void show();
 
@@ -196,7 +215,9 @@ BrCommand *BrCommandStackPtr = NULL; //BrCommandのスタックポインタ
 
 void AllocaPush(Factor); //AllocaのLLVMcodeを作成して線形リストに追加する関数
 void GlobalPush(Factor);
+void ArrayGlobalPush(char*, int);
 void StorePush(Factor, Factor);
+void ArrayStorePush(char*, Factor);
 void LoadPush(Factor, Factor);
 void BrUncondPush(int);
 void BrCondPush(Factor, int, int);
@@ -210,6 +231,8 @@ void ReadPush(Factor, Factor);
 void WritePush(Factor, Factor);
 void CallPush();
 void RetPush(Rettype);
+void SextPush(Factor, Factor);
+void GetelementptrPush(char*, Factor, Factor);
 
 void cmpcalc(Cmptype); //比較演算
 void calc(LLVMcommand); //四則演算
@@ -372,6 +395,17 @@ statement
 
     assignment_statement
     : IDENT ASSIGN expression {StorePush(FactorStackPtr->data, *lookup($1));}
+    | IDENT LBRACE expression {FactorPush(makeFactor(CONSTANT, "", lookupArray($1)->lnum));
+                               calc(Sub);
+                               Factor arg1 = makeFactor(LOCAL_VAR, "", reg_cntr++);
+                               SextPush(FactorPop(), arg1);
+                               Factor retval = makeFactor(LOCAL_VAR, "", reg_cntr++);
+                               GetelementptrPush($1, arg1, retval);
+                               FactorPush(retval);
+                               }
+      RBRACE ASSIGN expression {Factor arg1 = FactorPop();
+                                Factor retval = FactorPop();
+                                StorePush(arg1, retval);}
     ;
 
     if_statement
@@ -402,10 +436,10 @@ statement
       expression {Factor arg1 = makeFactor(LOCAL_VAR, "", reg_cntr++);
                   LoadPush(*lookup($2), arg1);
                   Factor retval = makeFactor(LOCAL_VAR, "", reg_cntr++);
-                  IcmpPush(SLT, arg1, FactorStackPtr->data, retval); BrCondPush(retval, reg_cntr, -1);}
+                  IcmpPush(SLE, arg1, FactorStackPtr->data, retval); BrCondPush(retval, reg_cntr, -1);}
       DO {LabelPush(reg_cntr++);}
       statement {Factor incrementee = *lookup($2);
-                 Factor arg1 = makeFactor(LOCAL_VAR, "", reg_cntr++);
+                 Factor arg1 = makeFactor(LOCAL_VAR, "", reg_cntr);
                  LoadPush(incrementee, makeFactor(LOCAL_VAR, "", reg_cntr++));
                  Factor retval = makeFactor(LOCAL_VAR, "", reg_cntr++);
                  AddPush(arg1, makeFactor(CONSTANT, "", 1), retval);
@@ -431,15 +465,35 @@ statement
     ;
 
     read_statement
-    : READ LPAREN IDENT RPAREN {ReadPush(*lookup($3), makeFactor(LOCAL_VAR, "", reg_cntr++));
-                                fprintf(fp, "@.str = private unnamed_addr constant [3 x i8] c\"%%d\\00\", align 1\n");
-                                fprintf(fp, "declare i32 @scanf(i8*, ...) #1\n");}
+    : READ LPAREN IDENT RPAREN {if (read_decl_flag == 0) {
+                                    fprintf(fp, "@.str = private unnamed_addr constant [3 x i8] c\"%%d\\00\", align 1\n");
+                                    fprintf(fp, "declare i32 @scanf(i8*, ...) #1\n");
+                                    read_decl_flag = 1;
+                                    read_arg = 0;
+                                }
+                                ReadPush(*lookup($3), makeFactor(LOCAL_VAR, "", reg_cntr++));}
+    | READ LPAREN IDENT LBRACE expression RBRACE RPAREN {if (read_decl_flag == 0) {
+                                                             fprintf(fp, "@.str = private unnamed_addr constant [3 x i8] c\"%%d\\00\", align 1\n");
+                                                             fprintf(fp, "declare i32 @scanf(i8*, ...) #1\n");
+                                                             read_decl_flag = 1;
+                                                             read_arg = 0;
+                                                         }
+                                                         FactorPush(makeFactor(CONSTANT, "", lookupArray($3)->lnum));
+                                                         calc(Sub);
+                                                         Factor arg1 = makeFactor(LOCAL_VAR, "", reg_cntr++);
+                                                         SextPush(FactorPop(), arg1);
+                                                         Factor retval = makeFactor(LOCAL_VAR, "", reg_cntr++);
+                                                         GetelementptrPush($3, arg1, retval);
+                                                         ReadPush(retval, makeFactor(LOCAL_VAR, "", reg_cntr++));} 
     ;
 
     write_statement
     : WRITE LPAREN expression RPAREN {WritePush(FactorStackPtr->data, makeFactor(LOCAL_VAR, "", reg_cntr++));
+                                      if (write_decl_flag == 0) {
                                       fprintf(fp, "@.str.1 = private unnamed_addr constant [4 x i8] c\"%%d\\0A\\00\", align 1\n");
-                                      fprintf(fp, "declare i32 @printf(i8*, ...) #1\n");}
+                                      fprintf(fp, "declare i32 @printf(i8*, ...) #1\n");
+                                      write_decl_flag = 1;
+                                      }}
     ;
 
     null_statement
@@ -482,6 +536,16 @@ statement
 
     var_name
     : IDENT {FactorPush(*lookup($1));}
+    | IDENT LBRACE expression RBRACE {FactorPush(makeFactor(CONSTANT, "", lookupArray($1)->lnum));
+                                      calc(Sub);
+                                      Factor arg1 = makeFactor(LOCAL_VAR, "", reg_cntr++);
+                                      SextPush(FactorPop(), arg1);
+                                      Factor retval = makeFactor(LOCAL_VAR, "", reg_cntr++);
+                                      GetelementptrPush($1, arg1, retval);
+                                      Factor tmp = makeFactor(LOCAL_VAR, "", reg_cntr++);
+                                      LoadPush(retval, tmp);
+                                      FactorPush(tmp);
+                                      }
     ;
 
     arg_list
@@ -492,7 +556,9 @@ statement
 
     id_list
     : IDENT {insert($1, flag);}
+    | IDENT LBRACE NUMBER INTERVAL NUMBER RBRACE {insertArray($1, $3, $5, flag);}
     | id_list COMMA IDENT {insert($3, flag);}
+    | id_list COMMA IDENT LBRACE NUMBER INTERVAL NUMBER RBRACE {insertArray($3, $5, $7, flag);}
     ;
 
 
@@ -569,17 +635,48 @@ void insert(char *s, Scope flag) {
     show(); //記号表のデータを出力
 }
 
+void insertArray(char* s, int lnum, int rnum, Scope flag) {
+    TableStack *tmp = (TableStack *)malloc(sizeof(TableStack));
+    tmp->prev = TableStackPtr; //新しいデータのprevは現先頭データを指す
+
+    //データのレコード部分を作成
+    strcpy(tmp->data.vname ,s);
+    tmp->data.type = flag;
+    tmp->lnum = lnum;
+    tmp->rnum = rnum;
+    tmp->num = rnum-lnum+1;
+
+    if (flag == GLOBAL_VAR) {
+        ArrayGlobalPush(s, rnum-lnum+1);
+    }
+
+    TableStackPtr = tmp; //スタックの先頭を新しいデータに変更
+}
+
 /* 記号表から検索を行う関数 */
 Factor* lookup(char *s) {
     TableStack *p = TableStackPtr;
     while (strcmp(p->data.vname, s) != 0) { //引数と一致する記号を見つけるまで
         if (p->prev == NULL) { //先頭に達しても見つからない場合として終了
             printf("%s not found\n", s);
-            return &(p->data);
+            return NULL;
         }
 	      p = p->prev; //スタックの一つ前のデータへ辿る
     }
     return &(p->data);
+}
+
+/* 記号表からarray検索を行う関数 */
+TableStack* lookupArray(char *s) {
+    TableStack *p = TableStackPtr;
+    while (strcmp(p->data.vname, s) != 0) { //引数と一致する記号を見つけるまで
+        if (p->prev == NULL) { //先頭に達しても見つからない場合として終了
+            printf("%s not found\n", s);
+            return NULL;
+        }
+	      p = p->prev; //スタックの一つ前のデータへ辿る
+    }
+    return p;
 }
 
 /* 記号表の削除を行う関数 */
@@ -699,7 +796,7 @@ void calc(LLVMcommand ope) {
             DivPush(arg1, arg2, retval);
             break;
         default:
-            fprintf(fp, "Unexpected token error\n");
+            printf("Unexpected token error\n");
             break;
     }
 }
@@ -792,6 +889,15 @@ void GlobalPush(Factor retval) {
     LLVMPush(tmp);
 }
 
+void ArrayGlobalPush(char* vname, int num) {
+    LLVMcode *tmp = (LLVMcode *)malloc(sizeof(LLVMcode));
+    tmp->command = ArrayGlobal;
+    strcpy(tmp->args.arrayglobal.vname, vname);
+    tmp->args.arrayglobal.num = num;
+    tmp->next = NULL;
+    LLVMPush(tmp);
+}
+
 /* StoreのLLVMcodeを作成し線形リストに追加する関数 */
 void StorePush(Factor arg1, Factor arg2) {
     LLVMcode *tmp = (LLVMcode *)malloc(sizeof(LLVMcode));
@@ -800,6 +906,11 @@ void StorePush(Factor arg1, Factor arg2) {
     tmp->args.store.arg2 = arg2;
     tmp->next = NULL;
     LLVMPush(tmp);
+}
+
+void ArrayStorePush(char* s, Factor f) {
+    LLVMcode *tmp = (LLVMcode *)malloc(sizeof(LLVMcode));
+
 }
 
 /* LoadのLLVMcodeを作成し線形リストに追加する関数 */
@@ -941,11 +1052,32 @@ void RetPush(Rettype rettype) {
       if (strcmp(decltl->fname, "main") == 0) {
         tmp->args.retint.retval = makeFactor(CONSTANT, "", 0);
       } else {
-        tmp->args.retint.retval = *lookup(decltl->fname);
+        Factor retval = makeFactor(LOCAL_VAR, "", reg_cntr);
+        LoadPush(*lookup(decltl->fname), retval);
+        tmp->args.retint.retval = retval;
       }
     } else if (rettype == VOID) {
       tmp->command = Retvoid;
     }
+    tmp->next = NULL;
+    LLVMPush(tmp);
+}
+
+void SextPush(Factor arg1, Factor retval) {
+    LLVMcode *tmp = (LLVMcode *)malloc(sizeof(LLVMcode));
+    tmp->command = Sext;
+    tmp->args.sext.arg1 = arg1;
+    tmp->args.sext.retval = retval;
+    tmp->next = NULL;
+    LLVMPush(tmp);
+}
+
+void GetelementptrPush(char* vname, Factor arg1, Factor retval) {
+    LLVMcode *tmp = (LLVMcode *)malloc(sizeof(LLVMcode));
+    tmp->command = Getelementptr;
+    strcpy(tmp->args.getelementptr.vname, vname);
+    tmp->args.getelementptr.arg1 = arg1;
+    tmp->args.getelementptr.retval = retval;
     tmp->next = NULL;
     LLVMPush(tmp);
 }
@@ -985,6 +1117,8 @@ void displayFactor(Factor factor){
 void displayLlvmcodes(LLVMcode *code){
   if( code == NULL ) return;
   Argument *a;
+  char *vname;
+  int num;
   switch( code->command ) {
   case Alloca:
     fprintf(fp, "  ");
@@ -994,6 +1128,9 @@ void displayLlvmcodes(LLVMcode *code){
   case Global:
     displayFactor( (code->args).global.retval );
     fprintf(fp, " = common global i32 %d, align 4\n", (code->args).global.retval.val);
+    break;
+  case ArrayGlobal:
+    fprintf(fp, "@%s = common global [%d x i32] zeroinitializer, align 16", (code->args).arrayglobal.vname, (code->args).arrayglobal.num);
     break;
   case Store:
     fprintf(fp, "  ");
@@ -1122,7 +1259,7 @@ void displayLlvmcodes(LLVMcode *code){
     } else {
       fprintf(fp, "  ");
       displayFactor((code->args).call.ret);
-      fprintf(fp, " = call void @");
+      fprintf(fp, " = call i32 @");
       fprintf(fp, "%s(", (code->args).call.fname);
       for (a = (code->args).call.arghd; a != (code->args).call.argtl; a = a->next) {
         fprintf(fp, "i32 ");
@@ -1144,6 +1281,21 @@ void displayLlvmcodes(LLVMcode *code){
   case Retvoid:
     fprintf(fp, "  ret void\n");
     break;
+  case Sext:
+    fprintf(fp, "  ");
+    displayFactor((code->args).sext.retval);
+    fprintf(fp, " = sext i32 ");
+    displayFactor((code->args).sext.arg1);
+    fprintf(fp, " to i64\n");
+    break;
+  case Getelementptr:
+    fprintf(fp, "  ");
+    displayFactor((code->args).getelementptr.retval);
+    strcpy(vname, (code->args).getelementptr.vname);
+    num = lookupArray(vname)->num;
+    fprintf(fp, " = getelementptr inbounds [%d x i32], [%d x i32]* @%s, i64 0, i64 ", num, num, vname);
+    displayFactor((code->args).getelementptr.arg1);
+    fprintf(fp, "\n");
   default:
     break;
   }
