@@ -74,7 +74,9 @@ typedef enum {
   Retint,   /* ret    */
   Retvoid,  /* retvoid*/
   Sext,     /* sext   */
-  Getelementptr /* getelementptr */
+  Getelementptr, /* getelementptr */
+  Shl,      /* shl    */
+  Ashr      /* ashr   */
 } LLVMcommand;
 
 /* 比較演算子の種類 */
@@ -153,6 +155,12 @@ typedef struct llvmcode {
     struct { /* getelementptr */
       char vname[256]; Factor arg1; Factor retval;
     } getelementptr;
+    struct { /* shl */
+      Factor arg1; int arg2; Factor retval;
+    } shl;
+    struct { /* ashr */
+      Factor arg1; int arg2; Factor retval;
+    } ashr;
   } args;
   /* 次の命令へのポインタ */
   struct llvmcode *next;
@@ -234,6 +242,8 @@ void CallPush();
 void RetPush(Rettype);
 void SextPush(Factor, Factor);
 void GetelementptrPush(char*, Factor, Factor);
+void ShlPush(Factor, int, Factor);
+void AshrPush(Factor, int, Factor);
 
 void cmpcalc(Cmptype); //比較演算
 void calc(LLVMcommand); //四則演算
@@ -779,6 +789,7 @@ void calc(LLVMcommand ope) {
     Factor arg1, arg2, retval;
     arg2 = FactorPop();
     arg1 = FactorPop();
+    int n = 0, flag = 1;
 
     retval = makeFactor(LOCAL_VAR, "", reg_cntr++);
     FactorPush(retval); //結果を突っ込む
@@ -791,10 +802,50 @@ void calc(LLVMcommand ope) {
             SubPush(arg1, arg2, retval);
             break;
         case Mult:
-            MultPush(arg1, arg2, retval);
+            if (arg2.type == CONSTANT) {
+                int x = arg2.val;
+                if (x < 0) {
+                    x = -x;
+                }
+                while (x > 1) {
+                    if (x % 2 == 1) {
+                        flag = 0;
+                        break;
+                    }
+                    x >>= 1;
+                    n++;
+                }
+            } else {
+                flag = 0;
+            }
+            if (flag) {
+                ShlPush(arg1, n, retval);
+            } else {
+                MultPush(arg1, arg2, retval);
+            }
             break;
         case Div:
-            DivPush(arg1, arg2, retval);
+            if (arg2.type == CONSTANT) {
+                int x = arg2.val;
+                if (x < 0) {
+                    x = -x;
+                }
+                while (x > 1) {
+                    if (x % 2 == 1) {
+                        flag = 0;
+                        break;
+                    }
+                    x >>= 1;
+                    n++;
+                }
+            } else {
+                flag = 0;
+            }
+            if (flag) {
+                AshrPush(arg1, n, retval);
+            } else {
+                DivPush(arg1, arg2, retval);
+            }
             break;
         default:
             printf("Unexpected token error\n");
@@ -1083,6 +1134,26 @@ void GetelementptrPush(char* vname, Factor arg1, Factor retval) {
     LLVMPush(tmp);
 }
 
+void ShlPush(Factor arg1, int arg2, Factor retval) {
+    LLVMcode *tmp = (LLVMcode *)malloc(sizeof(LLVMcode));
+    tmp->command = Shl;
+    tmp->args.shl.arg1 = arg1;
+    tmp->args.shl.arg2 = arg2;
+    tmp->args.shl.retval = retval;
+    tmp->next = NULL;
+    LLVMPush(tmp);
+}
+
+void AshrPush(Factor arg1, int arg2, Factor retval) {
+    LLVMcode *tmp = (LLVMcode *)malloc(sizeof(LLVMcode));
+    tmp->command = Ashr;
+    tmp->args.ashr.arg1 = arg1;
+    tmp->args.ashr.arg2 = arg2;
+    tmp->args.ashr.retval = retval;
+    tmp->next = NULL;
+    LLVMPush(tmp);
+}
+
 void FunPush(Fundecl *tmp) {
     if (declhd == NULL) {
         declhd = tmp;
@@ -1297,6 +1368,22 @@ void displayLlvmcodes(LLVMcode *code){
     fprintf(fp, " = getelementptr inbounds [%d x i32], [%d x i32]* @%s, i64 0, i64 ", num, num, vname);
     displayFactor((code->args).getelementptr.arg1);
     fprintf(fp, "\n");
+  case Shl:
+    fprintf(fp, "  ");
+    displayFactor((code->args).shl.retval);
+    fprintf(fp, " = shl i32 ");
+    displayFactor((code->args).shl.arg1);
+    fprintf(fp, ", %d", (code->args).shl.arg2);
+    fprintf(fp, "\n");
+    break;
+  case Ashr:
+    fprintf(fp, "  ");
+    displayFactor((code->args).shl.retval);
+    fprintf(fp, " = ashr i32 ");
+    displayFactor((code->args).shl.arg1);
+    fprintf(fp, ", %d", (code->args).shl.arg2);
+    fprintf(fp, "\n");
+    break;
   default:
     break;
   }

@@ -92,7 +92,9 @@ typedef enum {
   Retint,   /* ret    */
   Retvoid,  /* retvoid*/
   Sext,     /* sext   */
-  Getelementptr /* getelementptr */
+  Getelementptr, /* getelementptr */
+  Shl,      /* shl    */
+  Ashr      /* ashr   */
 } LLVMcommand;
 
 /* 比較演算子の種類 */
@@ -171,6 +173,12 @@ typedef struct llvmcode {
     struct { /* getelementptr */
       char vname[256]; Factor arg1; Factor retval;
     } getelementptr;
+    struct { /* shl */
+      Factor arg1; int arg2; Factor retval;
+    } shl;
+    struct { /* ashr */
+      Factor arg1; int arg2; Factor retval;
+    } ashr;
   } args;
   /* 次の命令へのポインタ */
   struct llvmcode *next;
@@ -252,6 +260,8 @@ void CallPush();
 void RetPush(Rettype);
 void SextPush(Factor, Factor);
 void GetelementptrPush(char*, Factor, Factor);
+void ShlPush(Factor, int, Factor);
+void AshrPush(Factor, int, Factor);
 
 void cmpcalc(Cmptype); /*比較演算*/
 void calc(LLVMcommand); /*四則演算*/
@@ -269,7 +279,7 @@ void displayFactor(Factor);
 void displayLlvmcodes(LLVMcode*);
 void displayLlvmfundecl(Fundecl*);
 
-#line 256 "parser.y"
+#line 266 "parser.y"
 #ifdef YYSTYPE
 #undef  YYSTYPE_IS_DECLARED
 #define YYSTYPE_IS_DECLARED 1
@@ -281,7 +291,7 @@ typedef union {
     char ident[MAXLENGTH+1];
 } YYSTYPE;
 #endif /* !YYSTYPE_IS_DECLARED */
-#line 284 "y.tab.c"
+#line 294 "y.tab.c"
 
 /* compatibility with bison */
 #ifdef YYPARSE_PARAM
@@ -691,7 +701,7 @@ typedef struct {
 } YYSTACKDATA;
 /* variables for the parser stack */
 static YYSTACKDATA yystack;
-#line 567 "parser.y"
+#line 577 "parser.y"
 
 yyerror(char *s)
 {
@@ -907,6 +917,7 @@ void calc(LLVMcommand ope) {
     Factor arg1, arg2, retval;
     arg2 = FactorPop();
     arg1 = FactorPop();
+    int n = 0, flag = 1;
 
     retval = makeFactor(LOCAL_VAR, "", reg_cntr++);
     FactorPush(retval); //結果を突っ込む
@@ -919,10 +930,50 @@ void calc(LLVMcommand ope) {
             SubPush(arg1, arg2, retval);
             break;
         case Mult:
-            MultPush(arg1, arg2, retval);
+            if (arg2.type == CONSTANT) {
+                int x = arg2.val;
+                if (x < 0) {
+                    x = -x;
+                }
+                while (x > 1) {
+                    if (x % 2 == 1) {
+                        flag = 0;
+                        break;
+                    }
+                    x >>= 1;
+                    n++;
+                }
+            } else {
+                flag = 0;
+            }
+            if (flag) {
+                ShlPush(arg1, n, retval);
+            } else {
+                MultPush(arg1, arg2, retval);
+            }
             break;
         case Div:
-            DivPush(arg1, arg2, retval);
+            if (arg2.type == CONSTANT) {
+                int x = arg2.val;
+                if (x < 0) {
+                    x = -x;
+                }
+                while (x > 1) {
+                    if (x % 2 == 1) {
+                        flag = 0;
+                        break;
+                    }
+                    x >>= 1;
+                    n++;
+                }
+            } else {
+                flag = 0;
+            }
+            if (flag) {
+                AshrPush(arg1, n, retval);
+            } else {
+                DivPush(arg1, arg2, retval);
+            }
             break;
         default:
             printf("Unexpected token error\n");
@@ -1211,6 +1262,26 @@ void GetelementptrPush(char* vname, Factor arg1, Factor retval) {
     LLVMPush(tmp);
 }
 
+void ShlPush(Factor arg1, int arg2, Factor retval) {
+    LLVMcode *tmp = (LLVMcode *)malloc(sizeof(LLVMcode));
+    tmp->command = Shl;
+    tmp->args.shl.arg1 = arg1;
+    tmp->args.shl.arg2 = arg2;
+    tmp->args.shl.retval = retval;
+    tmp->next = NULL;
+    LLVMPush(tmp);
+}
+
+void AshrPush(Factor arg1, int arg2, Factor retval) {
+    LLVMcode *tmp = (LLVMcode *)malloc(sizeof(LLVMcode));
+    tmp->command = Ashr;
+    tmp->args.ashr.arg1 = arg1;
+    tmp->args.ashr.arg2 = arg2;
+    tmp->args.ashr.retval = retval;
+    tmp->next = NULL;
+    LLVMPush(tmp);
+}
+
 void FunPush(Fundecl *tmp) {
     if (declhd == NULL) {
         declhd = tmp;
@@ -1425,6 +1496,22 @@ void displayLlvmcodes(LLVMcode *code){
     fprintf(fp, " = getelementptr inbounds [%d x i32], [%d x i32]* @%s, i64 0, i64 ", num, num, vname);
     displayFactor((code->args).getelementptr.arg1);
     fprintf(fp, "\n");
+  case Shl:
+    fprintf(fp, "  ");
+    displayFactor((code->args).shl.retval);
+    fprintf(fp, " = shl i32 ");
+    displayFactor((code->args).shl.arg1);
+    fprintf(fp, ", %d", (code->args).shl.arg2);
+    fprintf(fp, "\n");
+    break;
+  case Ashr:
+    fprintf(fp, "  ");
+    displayFactor((code->args).shl.retval);
+    fprintf(fp, " = ashr i32 ");
+    displayFactor((code->args).shl.arg1);
+    fprintf(fp, ", %d", (code->args).shl.arg2);
+    fprintf(fp, "\n");
+    break;
   default:
     break;
   }
@@ -1462,7 +1549,7 @@ void displayLlvmfundecl( Fundecl *decl ){
   }
   return;
 }
-#line 1465 "y.tab.c"
+#line 1552 "y.tab.c"
 
 #if YYDEBUG
 #include <stdio.h>		/* needed for printf */
@@ -1669,46 +1756,46 @@ yyreduce:
     switch (yyn)
     {
 case 1:
-#line 280 "parser.y"
+#line 290 "parser.y"
 	{fp = fopen("result.ll", "w");}
 break;
 case 2:
-#line 281 "parser.y"
+#line 291 "parser.y"
 	{displayLlvmfundecl(declhd); fclose(fp);}
 break;
 case 3:
-#line 285 "parser.y"
+#line 295 "parser.y"
 	{displayLlvmcodes(codehd);}
 break;
 case 4:
-#line 286 "parser.y"
+#line 296 "parser.y"
 	{/* main 関数 */
                          reg_cntr = 1;
 	                       insert("main", FUNC_NAME);
 	                       flag = LOCAL_VAR;}
 break;
 case 5:
-#line 290 "parser.y"
+#line 300 "parser.y"
 	{RetPush(INT);}
 break;
 case 15:
-#line 318 "parser.y"
+#line 328 "parser.y"
 	{RetPush(decltl->rettype); delete(); flag = GLOBAL_VAR;}
 break;
 case 16:
-#line 319 "parser.y"
+#line 329 "parser.y"
 	{RetPush(decltl->rettype); delete(); flag = GLOBAL_VAR;}
 break;
 case 17:
-#line 323 "parser.y"
+#line 333 "parser.y"
 	{flag = LOCAL_VAR; reg_cntr = 1;}
 break;
 case 19:
-#line 324 "parser.y"
+#line 334 "parser.y"
 	{flag = ARGUMENT; reg_cntr = 0;}
 break;
 case 20:
-#line 325 "parser.y"
+#line 335 "parser.y"
 	{flag = LOCAL_VAR;
                                        reg_cntr++;
                                        int i;
@@ -1726,22 +1813,22 @@ case 20:
                                        show();}
 break;
 case 22:
-#line 344 "parser.y"
+#line 354 "parser.y"
 	{insert(yystack.l_mark[0].ident, PROC_NAME);
              if (decltl->rettype == INT)
                  AllocaPush(makeFactor(LOCAL_VAR, yystack.l_mark[0].ident, reg_cntr++));
             }
 break;
 case 23:
-#line 351 "parser.y"
+#line 361 "parser.y"
 	{flag = LOCAL_VAR; reg_cntr = 1;}
 break;
 case 25:
-#line 352 "parser.y"
+#line 362 "parser.y"
 	{flag = ARGUMENT; reg_cntr = 0;}
 break;
 case 26:
-#line 353 "parser.y"
+#line 363 "parser.y"
 	{flag = LOCAL_VAR;
                                        reg_cntr++;
                                        insert(decltl->fname, LOCAL_VAR);
@@ -1760,15 +1847,15 @@ case 26:
                                        show(); }
 break;
 case 28:
-#line 373 "parser.y"
+#line 383 "parser.y"
 	{insert(yystack.l_mark[0].ident, FUNC_NAME);}
 break;
 case 41:
-#line 398 "parser.y"
+#line 408 "parser.y"
 	{StorePush(FactorStackPtr->data, *lookup(yystack.l_mark[-2].ident));}
 break;
 case 42:
-#line 399 "parser.y"
+#line 409 "parser.y"
 	{FactorPush(makeFactor(CONSTANT, "", lookupArray(yystack.l_mark[-2].ident)->lnum));
                                calc(Sub);
                                Factor arg1 = makeFactor(LOCAL_VAR, "", reg_cntr++);
@@ -1779,78 +1866,78 @@ case 42:
                                }
 break;
 case 43:
-#line 407 "parser.y"
+#line 417 "parser.y"
 	{Factor arg1 = FactorPop();
                                 Factor retval = FactorPop();
                                 StorePush(arg1, retval);}
 break;
 case 44:
-#line 413 "parser.y"
+#line 423 "parser.y"
 	{BrCondPush(FactorStackPtr->data, reg_cntr, -1);}
 break;
 case 45:
-#line 414 "parser.y"
+#line 424 "parser.y"
 	{LabelPush(reg_cntr++);}
 break;
 case 46:
-#line 415 "parser.y"
+#line 425 "parser.y"
 	{backpatch(reg_cntr);}
 break;
 case 47:
-#line 416 "parser.y"
+#line 426 "parser.y"
 	{BrCommandPop(); LabelPush(reg_cntr++);}
 break;
 case 48:
-#line 420 "parser.y"
+#line 430 "parser.y"
 	{BrUncondPush(reg_cntr);}
 break;
 case 49:
-#line 421 "parser.y"
+#line 431 "parser.y"
 	{BrUncondPush(-1); LabelPush(reg_cntr++);}
 break;
 case 50:
-#line 422 "parser.y"
+#line 432 "parser.y"
 	{backpatch(reg_cntr);
                  BrUncondPush(reg_cntr);}
 break;
 case 51:
-#line 427 "parser.y"
+#line 437 "parser.y"
 	{BrUncondPush(reg_cntr); LabelPush(reg_cntr++);}
 break;
 case 52:
-#line 428 "parser.y"
+#line 438 "parser.y"
 	{BrCondPush(FactorStackPtr->data, reg_cntr, -1);}
 break;
 case 53:
-#line 429 "parser.y"
+#line 439 "parser.y"
 	{LabelPush(reg_cntr++);}
 break;
 case 54:
-#line 430 "parser.y"
+#line 440 "parser.y"
 	{backpatch(reg_cntr); BrUncondPush(BrCommandStackPtr->ptr->args.bruncond.arg1); BrCommandPop(); BrCommandPop(); LabelPush(reg_cntr++);}
 break;
 case 55:
-#line 434 "parser.y"
+#line 444 "parser.y"
 	{StorePush(FactorStackPtr->data, *lookup(yystack.l_mark[-2].ident));
                                    BrUncondPush(reg_cntr);}
 break;
 case 56:
-#line 436 "parser.y"
+#line 446 "parser.y"
 	{LabelPush(reg_cntr++);}
 break;
 case 57:
-#line 437 "parser.y"
+#line 447 "parser.y"
 	{Factor arg1 = makeFactor(LOCAL_VAR, "", reg_cntr++);
                   LoadPush(*lookup(yystack.l_mark[-6].ident), arg1);
                   Factor retval = makeFactor(LOCAL_VAR, "", reg_cntr++);
                   IcmpPush(SLE, arg1, FactorStackPtr->data, retval); BrCondPush(retval, reg_cntr, -1);}
 break;
 case 58:
-#line 441 "parser.y"
+#line 451 "parser.y"
 	{LabelPush(reg_cntr++);}
 break;
 case 59:
-#line 442 "parser.y"
+#line 452 "parser.y"
 	{Factor incrementee = *lookup(yystack.l_mark[-10].ident);
                  Factor arg1 = makeFactor(LOCAL_VAR, "", reg_cntr);
                  LoadPush(incrementee, makeFactor(LOCAL_VAR, "", reg_cntr++));
@@ -1864,19 +1951,19 @@ case 59:
                               LabelPush(reg_cntr++);}
 break;
 case 60:
-#line 456 "parser.y"
+#line 466 "parser.y"
 	{CallPush();}
 break;
 case 61:
-#line 457 "parser.y"
+#line 467 "parser.y"
 	{CallPush();}
 break;
 case 62:
-#line 461 "parser.y"
+#line 471 "parser.y"
 	{CallCommandGenPush(yystack.l_mark[0].ident, VOID);}
 break;
 case 64:
-#line 469 "parser.y"
+#line 479 "parser.y"
 	{if (read_decl_flag == 0) {
                                     fprintf(fp, "@.str = private unnamed_addr constant [3 x i8] c\"%%d\\00\", align 1\n");
                                     fprintf(fp, "declare i32 @scanf(i8*, ...) #1\n");
@@ -1886,7 +1973,7 @@ case 64:
                                 ReadPush(*lookup(yystack.l_mark[-1].ident), makeFactor(LOCAL_VAR, "", reg_cntr++));}
 break;
 case 65:
-#line 476 "parser.y"
+#line 486 "parser.y"
 	{if (read_decl_flag == 0) {
                                                              fprintf(fp, "@.str = private unnamed_addr constant [3 x i8] c\"%%d\\00\", align 1\n");
                                                              fprintf(fp, "declare i32 @scanf(i8*, ...) #1\n");
@@ -1902,7 +1989,7 @@ case 65:
                                                          ReadPush(retval, makeFactor(LOCAL_VAR, "", reg_cntr++));}
 break;
 case 66:
-#line 492 "parser.y"
+#line 502 "parser.y"
 	{WritePush(FactorStackPtr->data, makeFactor(LOCAL_VAR, "", reg_cntr++));
                                       if (write_decl_flag == 0) {
                                       fprintf(fp, "@.str.1 = private unnamed_addr constant [4 x i8] c\"%%d\\0A\\00\", align 1\n");
@@ -1911,71 +1998,71 @@ case 66:
                                       }}
 break;
 case 68:
-#line 505 "parser.y"
+#line 515 "parser.y"
 	{cmpcalc(EQUAL);}
 break;
 case 69:
-#line 506 "parser.y"
+#line 516 "parser.y"
 	{cmpcalc(NE);}
 break;
 case 70:
-#line 507 "parser.y"
+#line 517 "parser.y"
 	{cmpcalc(SLT);}
 break;
 case 71:
-#line 508 "parser.y"
+#line 518 "parser.y"
 	{cmpcalc(SLE);}
 break;
 case 72:
-#line 509 "parser.y"
+#line 519 "parser.y"
 	{cmpcalc(SGT);}
 break;
 case 73:
-#line 510 "parser.y"
+#line 520 "parser.y"
 	{cmpcalc(SGE);}
 break;
 case 75:
-#line 515 "parser.y"
+#line 525 "parser.y"
 	{FactorPush(makeFactor(CONSTANT, "", 1)); calc(Mult);}
 break;
 case 76:
-#line 516 "parser.y"
+#line 526 "parser.y"
 	{FactorPush(makeFactor(CONSTANT, "", -1)); calc(Mult);}
 break;
 case 77:
-#line 517 "parser.y"
+#line 527 "parser.y"
 	{calc(Add);}
 break;
 case 78:
-#line 518 "parser.y"
+#line 528 "parser.y"
 	{calc(Sub);}
 break;
 case 80:
-#line 523 "parser.y"
+#line 533 "parser.y"
 	{calc(Mult);}
 break;
 case 81:
-#line 524 "parser.y"
+#line 534 "parser.y"
 	{calc(Div);}
 break;
 case 83:
-#line 529 "parser.y"
+#line 539 "parser.y"
 	{FactorPush(makeFactor(CONSTANT, "", yystack.l_mark[0].num));}
 break;
 case 86:
-#line 535 "parser.y"
+#line 545 "parser.y"
 	{CallCommandGenPush(yystack.l_mark[0].ident, INT);}
 break;
 case 87:
-#line 535 "parser.y"
+#line 545 "parser.y"
 	{CallPush();}
 break;
 case 88:
-#line 539 "parser.y"
+#line 549 "parser.y"
 	{FactorPush(*lookup(yystack.l_mark[0].ident));}
 break;
 case 89:
-#line 540 "parser.y"
+#line 550 "parser.y"
 	{FactorPush(makeFactor(CONSTANT, "", lookupArray(yystack.l_mark[-3].ident)->lnum));
                                       calc(Sub);
                                       Factor arg1 = makeFactor(LOCAL_VAR, "", reg_cntr++);
@@ -1988,30 +2075,30 @@ case 89:
                                       }
 break;
 case 91:
-#line 554 "parser.y"
+#line 564 "parser.y"
 	{ArgPush();}
 break;
 case 92:
-#line 555 "parser.y"
+#line 565 "parser.y"
 	{ArgPush();}
 break;
 case 93:
-#line 559 "parser.y"
+#line 569 "parser.y"
 	{insert(yystack.l_mark[0].ident, flag);}
 break;
 case 94:
-#line 560 "parser.y"
+#line 570 "parser.y"
 	{insertArray(yystack.l_mark[-5].ident, yystack.l_mark[-3].num, yystack.l_mark[-1].num, flag);}
 break;
 case 95:
-#line 561 "parser.y"
+#line 571 "parser.y"
 	{insert(yystack.l_mark[0].ident, flag);}
 break;
 case 96:
-#line 562 "parser.y"
+#line 572 "parser.y"
 	{insertArray(yystack.l_mark[-5].ident, yystack.l_mark[-3].num, yystack.l_mark[-1].num, flag);}
 break;
-#line 2014 "y.tab.c"
+#line 2101 "y.tab.c"
     }
     yystack.s_mark -= yym;
     yystate = *yystack.s_mark;
